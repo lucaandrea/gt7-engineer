@@ -1,0 +1,9 @@
+discord.py>=2.0
+discord-ext-voice-recv
+faster-whisper
+openai
+pydub
+TTS
+telemetry-server-py  # or however that’s published
+python-dotenv
+pillow
