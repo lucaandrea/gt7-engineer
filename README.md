@@ -77,6 +77,7 @@ A Discord-based real-time racing engineer assistant for GT7 that uses OpenAI and
 - TTS (Coqui TTS)
 - Pydub, ffmpeg
 - tkinter, pillow
+- gt-telem
 
 ## Contributing
 
