@@ -7,3 +7,4 @@ TTS
 telemetry-server-py  # or however that’s published
 python-dotenv
 pillow
+gt-telem
