@@ -3,8 +3,7 @@ discord-ext-voice-recv
 faster-whisper
 openai
 pydub
-TTS
-telemetry-server-py  # or however that’s published
+coqui-tts
 python-dotenv
 pillow
 gt-telem

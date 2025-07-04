@@ -37,7 +37,7 @@ p = inflect.engine()
 
 
 # Driver Name
-driver_name = "Jane Doe"
+driver_name = "Luca Collins"
 TRIGGER_PHRASE = "radio|really|video"
 
 # MAIN PROMPT 
@@ -282,7 +282,7 @@ async def maybe_handle_overtake(vc, latest):
                 f"Be sure to also mention what place they are now in, like P one (please leave a space between the P and the number of their place). Keep things short, no more than 10 words total!"
             )
             msg = client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",
                 messages=[{"role": "system", "content": prompt}]
             ).choices[0].message.content
             await play_line(vc, msg, "overtake")
@@ -322,7 +322,7 @@ async def maybe_handle_lap_update(vc, latest):
             stats = latest_telemetry_data()
             prompt += f" And please tell the driver they just set a new best lap of {prev_best_ms} ms. "
     summary = client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-4o-mini",
         messages=[{"role": "system", "content": prompt}]
     ).choices[0].message.content
     await play_line(vc, summary, "lap_update")
@@ -449,7 +449,7 @@ async def handle_engineer_flow(vc):
                 reply = "Loud and clear. Standing by for your next instruction."
             else:
                 reply = client.chat.completions.create(
-                    model="gpt-4o",
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": query}
@@ -496,7 +496,7 @@ async def maybe_announce_fuel(vc):
             )
 
             reply = client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt}
                 ]
