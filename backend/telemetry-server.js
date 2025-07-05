@@ -1,71 +1,39 @@
-import dgram from 'dgram';
 import { EventEmitter } from 'events';
+import { spawn } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const GT7_UDP_PORT = 33742; // Standard GT7 telemetry port
-const GT7_PACKET_SIZE = 296; // GT7 telemetry packet size
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export class TelemetryServer extends EventEmitter {
   constructor() {
     super();
-    this.socket = null;
+    this.pythonProcess = null;
     this.latest = null;
     this.running = false;
     this.reconnectInterval = null;
-    this.packetsReceived = 0;
-    this.lastPacketTime = null;
+    this.dataCount = 0;
+    this.lastDataTime = null;
+    this.useMockData = true; // Start with mock data, switch to Python when available
   }
 
   async start() {
     return new Promise((resolve, reject) => {
       try {
-        this.socket = dgram.createSocket('udp4');
+        console.log('🏁 Starting GT7 Telemetry server with Python bridge...');
         
-        this.socket.on('message', (msg, rinfo) => {
-          try {
-            this.packetsReceived++;
-            this.lastPacketTime = new Date();
-            
-            if (this.packetsReceived % 100 === 0) {
-              console.log(`📦 Received ${this.packetsReceived} UDP packets from ${rinfo.address}:${rinfo.port}`);
-            }
-            
-            if (msg.length >= GT7_PACKET_SIZE) {
-              this.latest = this.parseGT7Packet(msg);
-              this.emit('telemetry', this.latest);
-            } else {
-              console.log(`⚠️ Packet too small: ${msg.length} bytes (expected ${GT7_PACKET_SIZE})`);
-            }
-          } catch (error) {
-            console.error('Error parsing GT7 packet:', error);
-          }
-        });
-
-        this.socket.on('error', (error) => {
-          console.error('❌ UDP socket error:', error);
-          this.emit('error', error);
-        });
-
-        this.socket.on('listening', () => {
-          const address = this.socket.address();
-          console.log(`🏁 GT7 Telemetry server listening on ${address.address}:${address.port}`);
-          console.log(`📡 Waiting for UDP packets from SimHub forwarding to 10.0.1.62:${GT7_UDP_PORT}...`);
-          this.running = true;
-          
-          this.startConnectionMonitor();
-          
-          // Start mock data after 30s if no real packets received
-          setTimeout(() => {
-            if (this.packetsReceived === 0) {
-              console.log('🎮 No real packets after 30s, starting mock data for testing...');
-              this.startMockData();
-            }
-          }, 30000);
-          
-          resolve();
-        });
-
-        // Bind to all interfaces (0.0.0.0) to accept packets from network
-        this.socket.bind(GT7_UDP_PORT, '0.0.0.0');
+        // Try to start the Python GT7 bridge
+        this.startPythonBridge();
+        
+        // Start connection monitoring
+        this.startConnectionMonitor();
+        
+        // Start mock data initially
+        this.startMockData();
+        
+        this.running = true;
+        resolve();
         
       } catch (error) {
         reject(error);
@@ -73,20 +41,95 @@ export class TelemetryServer extends EventEmitter {
     });
   }
 
+  startPythonBridge() {
+    const pythonScript = path.join(__dirname, 'gt7_bridge.py');
+    
+    try {
+      console.log('🐍 Starting Python GT7 bridge...');
+      this.pythonProcess = spawn('python3', [pythonScript], {
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+
+      this.pythonProcess.stdout.on('data', (data) => {
+        const lines = data.toString().trim().split('\n');
+        
+        for (const line of lines) {
+          if (line.trim()) {
+            try {
+              const telemetryData = JSON.parse(line);
+              if (telemetryData && telemetryData.is_valid) {
+                this.latest = telemetryData;
+                this.dataCount++;
+                this.lastDataTime = new Date();
+                this.useMockData = false; // Switch from mock to real data
+                this.emit('telemetry', this.latest);
+                
+                if (this.dataCount % 100 === 0) {
+                  console.log(`📊 Received ${this.dataCount} telemetry updates from Python bridge`);
+                }
+              }
+            } catch (error) {
+              // Ignore JSON parse errors - might be partial data
+            }
+          }
+        }
+      });
+
+      this.pythonProcess.stderr.on('data', (data) => {
+        const message = data.toString().trim();
+        if (message) {
+          console.log(`🐍 Python bridge: ${message}`);
+        }
+      });
+
+      this.pythonProcess.on('error', (error) => {
+        console.error('❌ Python bridge error:', error.message);
+        console.log('📊 Falling back to mock data...');
+        this.useMockData = true;
+      });
+
+      this.pythonProcess.on('exit', (code) => {
+        console.log(`🐍 Python bridge exited with code ${code}`);
+        if (this.running) {
+          console.log('📊 Falling back to mock data...');
+          this.useMockData = true;
+          
+          // Try to restart after 10 seconds
+          setTimeout(() => {
+            if (this.running) {
+              console.log('🔄 Attempting to restart Python bridge...');
+              this.startPythonBridge();
+            }
+          }, 10000);
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Failed to start Python bridge:', error.message);
+      console.log('📊 Using mock data only...');
+      this.useMockData = true;
+    }
+  }
+
   startConnectionMonitor() {
     this.connectionMonitor = setInterval(() => {
       const now = new Date();
-      const timeSinceLastPacket = this.lastPacketTime ? 
-        (now - this.lastPacketTime) / 1000 : null;
       
-      if (this.packetsReceived === 0) {
-        console.log(`🔍 No packets received yet. Check SimHub forwarding to 10.0.1.62:${GT7_UDP_PORT}`);
-      } else if (timeSinceLastPacket > 30) {
-        console.log(`⚠️ No packets for ${timeSinceLastPacket.toFixed(1)}s. Last packet: ${this.lastPacketTime.toISOString()}`);
+      if (this.useMockData) {
+        console.log(`🎮 Using mock telemetry data (Python bridge unavailable)`);
       } else {
-        console.log(`✅ Connection healthy - ${this.packetsReceived} packets received, last: ${timeSinceLastPacket.toFixed(1)}s ago`);
+        const timeSinceLastData = this.lastDataTime ? 
+          (now - this.lastDataTime) / 1000 : null;
+        
+        if (this.dataCount === 0) {
+          console.log(`🔍 No telemetry data received yet from Python bridge`);
+        } else if (timeSinceLastData > 5) {
+          console.log(`⚠️ No data for ${timeSinceLastData.toFixed(1)}s. Last update: ${this.lastDataTime.toISOString()}`);
+        } else {
+          console.log(`✅ GT7 connection healthy - ${this.dataCount} updates received, last: ${timeSinceLastData.toFixed(1)}s ago`);
+        }
       }
-    }, 10000);
+    }, 15000);
   }
 
   stop() {
@@ -104,9 +147,9 @@ export class TelemetryServer extends EventEmitter {
     
     this.stopMockData();
     
-    if (this.socket) {
-      this.socket.close();
-      this.socket = null;
+    if (this.pythonProcess) {
+      this.pythonProcess.kill();
+      this.pythonProcess = null;
     }
     
     console.log('🛑 GT7 Telemetry server stopped');
@@ -116,83 +159,30 @@ export class TelemetryServer extends EventEmitter {
     return this.latest;
   }
 
-  // Parse GT7 UDP packet format
-  parseGT7Packet(buffer) {
-    try {
-      // GT7 packet structure based on official documentation
-      // Reference: https://github.com/snipem/gt7dashboard and GT7 community research
-      
-      const data = {
-        // Position and race info - correct offsets for GT7 v1.49+
-        position: buffer.readUInt16LE(0x74) || 1, // Race position 
-        currentLap: buffer.readUInt16LE(0x78) || 0, // Current lap
-        totalLaps: buffer.readUInt16LE(0x7A) || 0, // Total laps
-        
-        // Speed and engine data - correct GT7 offsets
-        speedKph: Math.abs(buffer.readFloatLE(0x4C) * 3.6) || 0, // Convert m/s to km/h
-        engineRpm: Math.abs(buffer.readFloatLE(0x3C)) || 0,
-        
-        // Fuel data - correct GT7 fuel offsets
-        fuelCapacity: buffer.readFloatLE(0x48) || 100,
-        fuelLevel: buffer.readFloatLE(0x44) || 100,
-        
-        // Timing data - correct GT7 lap time offsets
-        lastLapTimeMs: Math.abs(buffer.readInt32LE(0x7C)) || 0,
-        bestLapTimeMs: Math.abs(buffer.readInt32LE(0x80)) || 0,
-        
-        // Tire temperatures - correct GT7 tire temp offsets
-        tireTempFL: buffer.readFloatLE(0x60) || 80, // Front Left
-        tireTempFR: buffer.readFloatLE(0x64) || 80, // Front Right  
-        tireTempRL: buffer.readFloatLE(0x68) || 80, // Rear Left
-        tireTempRR: buffer.readFloatLE(0x6C) || 80, // Rear Right
-        
-        // Engine data - correct GT7 engine parameter offsets
-        oilPressure: buffer.readFloatLE(0x54) || 4.5, // Oil pressure
-        waterTemp: buffer.readFloatLE(0x58) || 90, // Water temperature
-        oilTemp: buffer.readFloatLE(0x5C) || 100, // Oil temperature
-        
-        // Race info - extract from flags
-        totalCars: buffer.readUInt8(0x76) || 20, // Total cars in race
-        
-        // Calculate derived values
-        get fuelPercent() {
-          return this.fuelCapacity > 0 ? Math.max(0, Math.min(100, (this.fuelLevel / this.fuelCapacity) * 100)) : 100;
-        },
-        
-        get deltaMs() {
-          if (this.bestLapTimeMs > 0 && this.lastLapTimeMs > 0 && this.bestLapTimeMs < 600000 && this.lastLapTimeMs < 600000) {
-            return this.lastLapTimeMs - this.bestLapTimeMs;
-          }
-          return 0;
-        }
-      };
-
-      // Data validation and sanitization
-      data.speedKph = Math.max(0, Math.min(400, data.speedKph || 0));
-      data.engineRpm = Math.max(0, Math.min(12000, data.engineRpm || 0));
-      data.position = Math.max(1, Math.min(20, data.position || 1));
-      data.currentLap = Math.max(0, Math.min(200, data.currentLap || 0));
-      data.totalLaps = Math.max(0, Math.min(200, data.totalLaps || 0));
-      
-      // Validate lap times (should be reasonable - between 30s and 10 minutes)
-      if (data.lastLapTimeMs < 30000 || data.lastLapTimeMs > 600000) {
-        data.lastLapTimeMs = 0;
-      }
-      if (data.bestLapTimeMs < 30000 || data.bestLapTimeMs > 600000) {
-        data.bestLapTimeMs = 0;
-      }
-
-      // Only log every 50th packet to reduce console spam
-      if (this.packetsReceived % 50 === 0) {
-        console.log(`🏁 Parsed telemetry - Lap: ${data.currentLap}, Speed: ${data.speedKph.toFixed(1)} km/h, RPM: ${data.engineRpm.toFixed(0)}, Fuel: ${data.fuelPercent.toFixed(1)}%`);
-      }
-
-      return data;
-      
-    } catch (error) {
-      console.error('Failed to parse GT7 packet:', error);
-      return this.generateMockData();
-    }
+  // Convert Python bridge data to our internal format
+  processPythonTelemetry(pythonData) {
+    return {
+      position: pythonData.position || 1,
+      currentLap: pythonData.currentLap || 0,
+      totalLaps: pythonData.totalLaps || 0,
+      speedKph: pythonData.speedKph || 0,
+      engineRpm: pythonData.engineRpm || 0,
+      fuelCapacity: pythonData.fuelCapacity || 100,
+      fuelLevel: pythonData.fuelLevel || 100,
+      fuelPercent: pythonData.fuelPercent || 100,
+      lastLapTimeMs: pythonData.lastLapTimeMs || 0,
+      bestLapTimeMs: pythonData.bestLapTimeMs || 0,
+      deltaMs: pythonData.deltaMs || 0,
+      tireTempFL: pythonData.tireTempFL || 80,
+      tireTempFR: pythonData.tireTempFR || 80,
+      tireTempRL: pythonData.tireTempRL || 80,
+      tireTempRR: pythonData.tireTempRR || 80,
+      oilPressure: pythonData.oilPressure || 4.5,
+      waterTemp: pythonData.waterTemp || 90,
+      oilTemp: pythonData.oilTemp || 100,
+      totalCars: pythonData.totalCars || 20,
+      timestamp: pythonData.timestamp || Date.now()
+    };
   }
 
   // Generate mock data for testing when GT7 is not running

@@ -107,6 +107,7 @@ You are "Delta", a calm yet decisive British Formula 1 race engineer. Your drive
 You will receive real-time telemetry via the updateTelemetry function. Use this data to provide strategic coaching.`,
       
       tools: [{
+        type: 'function',
         name: 'updateTelemetry',
         description: 'Real-time GT7 car telemetry data at 20Hz',
         parameters: {
